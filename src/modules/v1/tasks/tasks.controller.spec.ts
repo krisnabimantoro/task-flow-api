@@ -1,4 +1,5 @@
 import {
+  ArgumentsHost,
   BadRequestException,
   ExecutionContext,
   HttpException,
@@ -14,6 +15,7 @@ import {
 } from '../../../database/interfaces';
 import {
   createPaginatedResult,
+  HttpExceptionFilter,
   normalizePaginationQuery,
   RateLimiterGuard,
 } from '../../../utils';
@@ -66,8 +68,8 @@ describe('TasksController (v1)', () => {
       mockRepository.findPaginated.mockResolvedValue(paginated);
 
       const response = await controller.findAll({
-        page: '2',
-        limit: '5',
+        page: 2,
+        limit: 5,
         status: TaskStatus.TODO,
       });
 
@@ -210,6 +212,52 @@ describe('TasksController (v1)', () => {
       expect(guard.canActivate(context)).toBe(true);
       expect(headers.get('X-RateLimit-Remaining')).toBe('0');
       expect(() => guard.canActivate(context)).toThrow(HttpException);
+    });
+  });
+
+  describe('HttpExceptionFilter', () => {
+    it('formats validation array errors and unknown errors uniformly', () => {
+      const filter = new HttpExceptionFilter();
+      let capturedStatus = 0;
+      let capturedBody: unknown;
+
+      const host = {
+        switchToHttp: () => ({
+          getRequest: () => ({ url: '/v1/tasks' }),
+          getResponse: () => ({
+            status: (code: number) => {
+              capturedStatus = code;
+              return {
+                json: (body: unknown) => {
+                  capturedBody = body;
+                },
+              };
+            },
+          }),
+        }),
+      } as unknown as ArgumentsHost;
+
+      filter.catch(
+        new BadRequestException(['title should not be empty']),
+        host,
+      );
+      expect(capturedStatus).toBe(HttpStatus.BAD_REQUEST);
+      expect(capturedBody).toMatchObject({
+        success: false,
+        statusCode: HttpStatus.BAD_REQUEST,
+        message: 'Validation failed',
+        errors: ['title should not be empty'],
+        path: '/v1/tasks',
+      });
+
+      filter.catch(new Error('unexpected crash'), host);
+      expect(capturedStatus).toBe(HttpStatus.INTERNAL_SERVER_ERROR);
+      expect(capturedBody).toMatchObject({
+        success: false,
+        statusCode: HttpStatus.INTERNAL_SERVER_ERROR,
+        message: 'Internal server error',
+        path: '/v1/tasks',
+      });
     });
   });
 });
